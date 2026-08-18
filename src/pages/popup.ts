@@ -10,14 +10,14 @@
 
 // ── Types & Imports ───────────────────────────────────
 import type { PlatformKey, PageType, PageTypeConfig, CodeEntry } from '../types/platform.js';
-import type { ExtensionConfig } from '../types/config.js';
+import type { ExtensionConfig, GeneratedFilesConfig } from '../types/config.js';
 import type { RecentDirectoryEntry } from '../services/recent-target-directories.js';
 import type { WriteFilesResult } from '../services/target-directory-access.js';
 import type { PreflightResult } from '../services/preflight-diagnostics.js';
 import type { PageCaptureResult, PageWritebackResult, BizRuleProbeResult, BizRuleWritebackResult, H3yunCodeEditorProbeResult, H3yunCodeEditorWritebackResult, H3yunDesignerMetadataResult } from '../types/injection.js';
 
 import { logger } from '../lib/logger.js';
-import { resolvePageTypeConfig, resolveH3yunDesignMode, loadConfig, getPlatformKeyFromPageType, isRecognizedPlatformUrl } from '../services/config.js';
+import { resolvePageTypeConfig, resolveH3yunDesignMode, loadConfig, saveConfig, getPlatformKeyFromPageType, isRecognizedPlatformUrl } from '../services/config.js';
 import { pageCaptureMain } from '../injection/cloudpivot-capture.js';
 import { pageWritebackMain } from '../injection/cloudpivot-writeback.js';
 import { bizRuleProbeMain } from '../injection/cloudpivot-bizrule-probe.js';
@@ -543,12 +543,39 @@ async function handleOpenFilePickerGear(): Promise<void> {
   const platformKey = state.pageTypeConfig?.platformKey || 'cloudpivot';
   const { extraDocs } = await showFilePicker(platformKey, { gearMode: true });
   state.pendingExtraDocs = extraDocs;
+  // 同步持久化到 generatedFiles 配置，避免 popup 重开/切换后配置丢失
+  try {
+    const generatedFiles = mergeGeneratedFiles(state.config?.generatedFiles ?? {}, platformKey, extraDocs);
+    state.config = await saveConfig({ generatedFiles });
+  } catch (error: unknown) {
+    logger.warn('保存额外生成文件配置失败', { error: String(error) });
+  }
   const checked: string[] = [];
   if (extraDocs.readme) checked.push('README.md');
   if (extraDocs.agents) checked.push('AGENTS.md');
   if (extraDocs.design) checked.push('DESIGN.md');
   if (checked.length) addSuccessLog(`已配置额外生成文件：${checked.join('、')}。下次抓取生效。`);
   else addSuccessLog('已取消额外生成文件，下次抓取仅使用默认文件。');
+}
+
+/** 将弹层勾选的协作文档开关合并进对应平台的 generatedFiles 配置 */
+function mergeGeneratedFiles(
+  current: Record<string, GeneratedFilesConfig>,
+  platformKey: string,
+  extraDocs: Record<string, boolean>,
+): Record<string, GeneratedFilesConfig> {
+  const base = current[platformKey];
+  const platformFiles: GeneratedFilesConfig = {
+    fromCode: base?.fromCode ?? true,
+    readme: extraDocs.readme === true,
+    agents: extraDocs.agents === true,
+    design: extraDocs.design === true,
+    css: base?.css,
+    js: base?.js,
+    html: base?.html,
+    cs: base?.cs,
+  };
+  return { ...current, [platformKey]: platformFiles };
 }
 
 function renderPlatformButtons(): void {
@@ -1053,7 +1080,15 @@ function collectExtraDocs(): Record<string, boolean> {
     state.pendingExtraDocs = null;
     return docs;
   }
-  return { fromCode: true, readme: false, agents: false, design: false };
+  // 无本次一次性配置时，回退到持久化的 generatedFiles（齿轮弹层保存的开关）
+  const platformKey = state.pageTypeConfig?.platformKey || 'cloudpivot';
+  const generatedFiles: Partial<GeneratedFilesConfig> = state.config?.generatedFiles?.[platformKey] ?? {};
+  return {
+    fromCode: generatedFiles.fromCode !== false,
+    readme: generatedFiles.readme === true,
+    agents: generatedFiles.agents === true,
+    design: generatedFiles.design === true,
+  };
 }
 
 // ── Runtime Log Export ─────────────────────────────────
