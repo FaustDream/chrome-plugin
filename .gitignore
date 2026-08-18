@@ -1,29 +1,5 @@
-# Dependencies
 node_modules/
-packages/
-*.nupkg
-
-# Build artifacts
-native-host-rust/target/
-
-# Logs
-*.log
-
-# Environment
-.env
-.env.local
-
-# Tests & Coverage (所有测试和覆盖率，本地使用，不同步到仓库)
-tests/
-coverage/
-
-
-# 开发/发布用脚本（仅维护者本地使用）
-scripts/build-native-host-release.ps1
-scripts/package-extension-release.ps1
-
-# IDE
 .vscode/
 .codebuddy/
-.workbuddy/
-通用UI设计规范_v1.0.md
+dist/
+releases/

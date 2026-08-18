@@ -1,16 +1,21 @@
 {
+  "name": "cloudpiovt-plugin",
+  "version": "2.0.0",
+  "private": true,
   "type": "module",
+  "description": "云枢/氚云在线低代码平台与本地目录桥接扩展（TypeScript 按职责重写版）",
   "scripts": {
-    "check:js": "node --check src/background/background.js && node --check src/pages/options.js && node --check src/pages/popup.js && node --check lib/config.js && node --check lib/platform/h3yun-code.js && node --check lib/services/native-host.js && node --check lib/platform/readme-parser.js && node --check lib/release-notes.js && node --check lib/services/workspace-documents.js && node --check lib/services/preflight-diagnostics.js",
-    "verify:preflight": "node tests/scripts/verify-preflight-diagnostics.mjs",
-    "verify": "npm run check:js && npm run verify:preflight",
-    "test": "vitest run --config tests/vitest.config.js",
-    "test:coverage": "vitest run --config tests/vitest.config.js --coverage",
-    "test:all": "node tests/scripts/run-all-tests.mjs"
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.9",
-    "jsdom": "^29.1.1",
-    "vitest": "^4.1.9"
+    "@types/chrome": "^0.0.287",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
   }
 }

@@ -9,9 +9,7 @@
   <body>
     <main class="popup-shell">
       <header class="hero">
-        <div class="hero-header">
-          <h1>开发助手</h1>
-        </div>
+        <div class="hero-header"></div>
         <!-- 平台标签：自动识别后隐藏，unknown/default 时显示 -->
         <nav class="platform-tabs" id="platform-tabs" role="tablist" aria-label="开发平台">
           <button id="cloudpivot-tab" class="platform-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="cloudpivot-panel" data-platform-tab="cloudpivot">云枢</button>
@@ -50,7 +48,7 @@
         <section class="actions">
           <div class="action-row">
             <div class="capture-btn-group">
-              <button id="frontend-capture-write-btn" class="accent-btn capture-btn-main" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 抓取</button>
+              <button id="frontend-capture-write-btn" class="accent-btn capture-btn-main" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 前端抓取</button>
               <button id="cloudpivot-frontend-gear-btn" class="capture-gear-btn" type="button" title="配置额外生成的协作文件" aria-label="配置额外生成的协作文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
             </div>
             <button id="frontend-writeback-btn" class="secondary-btn" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3v4a2 2 0 0 1-2 2h-4"/><polyline points="17 9 21 5 17 1"/><path d="M21 5H10a7 7 0 0 0 0 14h5"/></svg> 回写</button>
@@ -75,8 +73,8 @@
           </div>
           <!-- 独立前后端回写并排 -->
           <div class="action-row" id="h3yun-separate-writeback-row" hidden>
-            <button id="h3yun-frontend-writeback-btn" class="secondary-btn" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3v4a2 2 0 0 1-2 2h-4"/><polyline points="17 9 21 5 17 1"/><path d="M21 5H10a7 7 0 0 0 0 14h5"/></svg> 前端回写</button>
-            <button id="h3yun-backend-writeback-btn" class="secondary-btn" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3v4a2 2 0 0 1-2 2h-4"/><polyline points="17 9 21 5 17 1"/><path d="M21 5H10a7 7 0 0 0 0 14h5"/></svg> 后端回写</button>
+            <button id="h3yun-frontend-writeback-btn" class="secondary-btn flex-1" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3v4a2 2 0 0 1-2 2h-4"/><polyline points="17 9 21 5 17 1"/><path d="M21 5H10a7 7 0 0 0 0 14h5"/></svg> 前端回写</button>
+            <button id="h3yun-backend-writeback-btn" class="secondary-btn flex-1" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3v4a2 2 0 0 1-2 2h-4"/><polyline points="17 9 21 5 17 1"/><path d="M21 5H10a7 7 0 0 0 0 14h5"/></svg> 后端回写</button>
           </div>
         </section>
       </section>
