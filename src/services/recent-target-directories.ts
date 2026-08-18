@@ -5,6 +5,7 @@
  */
 import { STORAGE_KEYS } from '../lib/constants.js';
 import { normalizePath } from '../lib/utils.js';
+import { getPlatformKeyFromPageType } from './config.js';
 
 export interface RecentDirectoryEntry {
   readonly path: string;
@@ -110,4 +111,11 @@ export async function removeRecentTargetDirectory(path: string): Promise<RecentD
 export async function clearAllRecentTargetDirectories(): Promise<RecentDirectoryEntry[]> {
   await saveRecords([]);
   return [];
+}
+
+/** 清空指定平台的历史目录记录（按 pageType 归属平台过滤） */
+export async function clearRecentTargetDirectoriesByPlatform(platformKey: string): Promise<RecentDirectoryEntry[]> {
+  const records = await loadRecords();
+  const next = records.filter((r) => getPlatformKeyFromPageType(r.pageType ?? '') !== platformKey);
+  return saveRecords(next);
 }

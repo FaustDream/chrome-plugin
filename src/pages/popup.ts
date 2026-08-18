@@ -28,7 +28,10 @@ import { h3yunCodeEditorWritebackMain } from '../injection/h3yun-code-writeback.
 import { resolveH3yunBackendFileName, resolveH3yunFrontendFileName, buildH3yunFromCodeContent } from '../lib/platform/h3yun-code.js';
 import { buildFromCodeContent, extractReadmeMetadataFromHtml } from '../lib/platform/readme-parser.js';
 import { BIZ_RULE_USAGE_NOTICE, buildBizRuleMissingFileDetails } from '../lib/platform/bizrule-constraints.js';
-import { getRecentTargetDirectories, clearAllRecentTargetDirectories } from '../services/recent-target-directories.js';
+import {
+  getRecentTargetDirectories,
+  clearRecentTargetDirectoriesByPlatform,
+} from '../services/recent-target-directories.js';
 import { getStoredDirectoryPath, saveHandleSelection } from '../services/target-directory-state.js';
 import {
   selectAndBindDirectory,
@@ -258,7 +261,8 @@ async function handleRemoveHistoryPath(path: string): Promise<void> {
 }
 
 async function handleClearHistory(): Promise<void> {
-  state.recentDirectories = await clearAllRecentTargetDirectories();
+  const platformKey = getActivePlatformKey();
+  state.recentDirectories = await clearRecentTargetDirectoriesByPlatform(platformKey);
   renderSearchDropdown('');
 }
 
@@ -348,10 +352,21 @@ async function handleCopyCurrentLink(): Promise<void> {
 
 // ── Search Dropdown ────────────────────────────────────
 
+/** 当前生效的平台标识（优先用户手动切换的标签，'auto' 时回退到页面识别平台） */
+function getActivePlatformKey(): PlatformKey {
+  if (state.activePlatformTab !== 'auto') return state.activePlatformTab;
+  return state.pageTypeConfig?.platformKey ?? 'cloudpivot';
+}
+
 function renderSearchDropdown(query = ''): void {
   const list = dom.searchDropdownList;
   if (!list) return;
-  const filtered = filterHistoryRecords(query, state.recentDirectories);
+  // 历史记录按当前生效平台过滤：氚云/云枢区分展示
+  const activePlatform = getActivePlatformKey();
+  const platformRecords = state.recentDirectories.filter(
+    (r) => getPlatformKeyFromPageType(r.pageType ?? '') === activePlatform,
+  );
+  const filtered = filterHistoryRecords(query, platformRecords);
 
   if (filtered.length === 0) {
     list.innerHTML = query
@@ -368,7 +383,7 @@ function renderSearchDropdown(query = ''): void {
 
   // 控制 HTML 中已有的"清空历史记录"区域（#search-dropdown-clear）
   const clearArea = $('#search-dropdown-clear') as HTMLElement | null;
-  if (clearArea) clearArea.hidden = state.recentDirectories.length === 0;
+  if (clearArea) clearArea.hidden = platformRecords.length === 0;
 }
 
 function openSearchDropdown(): void {
@@ -1247,14 +1262,11 @@ function bindEvents(): void {
       return;
     }
 
-    // 清除全部
+    // 清除当前平台历史
     const clearBtn = target.closest('.search-clear-btn') as HTMLElement | null;
     if (clearBtn) {
       e.stopPropagation();
-      void clearAllRecentTargetDirectories().then(() => {
-        state.recentDirectories = [];
-        renderSearchDropdown('');
-      });
+      void handleClearHistory();
       return;
     }
 
@@ -1307,11 +1319,12 @@ function bindEvents(): void {
   dom.copyLogBtn?.addEventListener('click', () => handleCopyRuntimeLog());
   dom.openOptionsBtn?.addEventListener('click', () => handleOpenOptions());
 
-  // 平台标签：点击切换面板 + 同步 active 状态
+  // 平台标签：点击切换面板 + 同步 active 状态 + 刷新历史下拉
   dom.platformTabs.forEach((tab) => {
     tab.addEventListener('click', () => {
       const platform = (tab.dataset.platformTab || 'cloudpivot') as PlatformKey;
       setActivePlatform(platform);
+      renderSearchDropdown(dom.searchInput?.value || '');
     });
   });
 }
