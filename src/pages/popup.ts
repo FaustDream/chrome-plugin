@@ -17,7 +17,7 @@ import type { PreflightResult } from '../services/preflight-diagnostics.js';
 import type { PageCaptureResult, PageWritebackResult, BizRuleProbeResult, BizRuleWritebackResult, H3yunCodeEditorProbeResult, H3yunCodeEditorWritebackResult, H3yunDesignerMetadataResult } from '../types/injection.js';
 
 import { logger } from '../lib/logger.js';
-import { resolvePageTypeConfig, resolveH3yunDesignMode, loadConfig, saveConfig, getPlatformKeyFromPageType, isRecognizedPlatformUrl } from '../services/config.js';
+import { resolvePageTypeConfig, resolveH3yunDesignMode, loadConfig, saveConfig, isRecognizedPlatformUrl } from '../services/config.js';
 import { pageCaptureMain } from '../injection/cloudpivot-capture.js';
 import { pageWritebackMain } from '../injection/cloudpivot-writeback.js';
 import { bizRuleProbeMain } from '../injection/cloudpivot-bizrule-probe.js';
@@ -31,8 +31,10 @@ import { BIZ_RULE_USAGE_NOTICE, buildBizRuleMissingFileDetails } from '../lib/pl
 import {
   getRecentTargetDirectories,
   clearRecentTargetDirectoriesByPlatform,
+  resolveRecentEntryPlatform,
 } from '../services/recent-target-directories.js';
 import { getStoredDirectoryPath, saveHandleSelection } from '../services/target-directory-state.js';
+import { saveLastDirectorySelection } from '../services/last-directory.js';
 import {
   selectAndBindDirectory,
   writeFilesToSelection,
@@ -42,6 +44,7 @@ import {
   requestTargetDirectoryPermission,
 } from '../services/target-directory-access.js';
 import { getTargetDirectoryHandle } from '../lib/directory/file-handle-db.js';
+import { createTargetDirectoryPageScope, saveTargetDirectoryPathByScope } from '../services/target-directory-session.js';
 import { buildMissingWorkspaceDocumentFiles, WORKSPACE_DOCUMENT_FILE_NAMES } from '../services/workspace-documents.js';
 import {
   createPreflightResult,
@@ -236,13 +239,28 @@ async function updateDirectoryDisplay(): Promise<void> {
 
 // ── Directory Selection ────────────────────────────────
 
+/**
+ * 恢复历史目录后同步持久化：更新平台「最后选择目录」+ 当前页面 scope 快照。
+ * 确保 popup 关闭重开后仍回显恢复的目录（否则会回退到旧的 lastSelection / 旧快照）。
+ */
+async function persistRecoveredDirectory(path: string, pageType: string): Promise<void> {
+  await saveLastDirectorySelection(path, pageType);
+  const pageScope = createTargetDirectoryPageScope(state.pageContext, pageType);
+  if (pageScope) await saveTargetDirectoryPathByScope(pageScope, path);
+}
+
 async function handleSelectHistoryPath(path: string): Promise<void> {
   if (!path || state.busy) return;
   closeSearchDropdown();
 
-  // 历史条目归属的 pageType：优先取条目自身记录，旧数据缺失时回退当前页面
+  // 历史条目归属的 pageType：优先取条目自身记录，旧数据缺失时按推断平台映射默认 pageType
   const entry = state.recentDirectories.find((r) => r.path === path);
-  const targetPageType = entry?.pageType || state.pageTypeConfig?.pageType || 'default';
+  const rawType = String(entry?.pageType || '').trim();
+  const targetPageType = rawType && rawType !== 'default'
+    ? rawType
+    : (resolveRecentEntryPlatform(entry ?? { path, pageType: '', lastUsedAt: 0 }, state.config) === 'h3yun'
+        ? 'h3yunDefault'
+        : 'default');
 
   // 句柄仍有效：直接恢复该历史目录，无需重新选择
   const permission = await getTargetDirectoryPermission(state.pageContext, targetPageType);
@@ -255,6 +273,7 @@ async function handleSelectHistoryPath(path: string): Promise<void> {
     }
     state.currentDirectoryPath = path;
     state.currentDirectoryLabel = extractLastFolderName(path);
+    await persistRecoveredDirectory(path, currentPageType);
     await updateDirectoryDisplay();
     addSuccessLog(`已恢复历史目录: ${state.currentDirectoryLabel || path}`);
     return;
@@ -271,6 +290,7 @@ async function handleSelectHistoryPath(path: string): Promise<void> {
     }
     state.currentDirectoryPath = path;
     state.currentDirectoryLabel = extractLastFolderName(path);
+    await persistRecoveredDirectory(path, currentPageType);
     await updateDirectoryDisplay();
     addSuccessLog(`目录已重新授权并恢复: ${state.currentDirectoryLabel || path}`);
     return;
@@ -300,7 +320,7 @@ async function handleRemoveHistoryPath(path: string): Promise<void> {
 
 async function handleClearHistory(): Promise<void> {
   const platformKey = getActivePlatformKey();
-  state.recentDirectories = await clearRecentTargetDirectoriesByPlatform(platformKey);
+  state.recentDirectories = await clearRecentTargetDirectoriesByPlatform(platformKey, state.config);
   renderSearchDropdown('');
 }
 
@@ -317,11 +337,34 @@ async function handleCopyPath(): Promise<void> {
   }
 }
 
-/** 「更新当前路径」：直接弹出目录选择对话框重新绑定 */
+/**
+ * 「更新当前路径」：三级阶梯
+ * 1) 权限已 granted → 直接弹目录选择器（用户主动换目录）
+ * 2) 已有句柄但权限失效（prompt/denied，如浏览器重启）→ 先一键授权（浏览器自带授权弹窗），
+ *    授权成功直接恢复路径，避免重新选择目录导致首次回写失败
+ * 3) 无句柄或授权失败 → 弹出目录选择对话框重新绑定
+ */
 async function handleRefreshDirectory(): Promise<void> {
   if (state.busy) return;
   await runWithButtonBusy(dom.refreshHandleBtn, async () => {
-    const pageType = state.pageTypeConfig?.pageType || 'default';
+    const pageType = state.pageTypeConfig?.pageType
+      || (getActivePlatformKey() === 'h3yun' ? 'h3yunDefault' : 'default');
+
+    // 已有句柄但权限失效：先尝试一键恢复授权（浏览器自带授权弹窗）
+    const permission = await getTargetDirectoryPermission(state.pageContext, pageType);
+    if (permission === 'prompt' || permission === 'denied') {
+      addLog('检测到目录需要重新授权，正在请求浏览器授权...', 'warning');
+      const granted = await requestTargetDirectoryPermission(state.pageContext, pageType);
+      if (granted === 'granted') {
+        const path = await getStoredDirectoryPath(state.pageContext, pageType);
+        state.currentDirectoryPath = path;
+        state.currentDirectoryLabel = extractLastFolderName(path);
+        await updateDirectoryDisplay();
+        addSuccessLog(`目录已重新授权并恢复: ${state.currentDirectoryLabel || path}`);
+        return;
+      }
+      addLog('授权未完成，将弹出目录选择对话框重新绑定', 'warning');
+    }
 
     addLog('正在弹出目录选择对话框...');
     const result = await selectAndBindDirectory(state.pageContext, {
@@ -383,10 +426,10 @@ function getActivePlatformKey(): PlatformKey {
 function renderSearchDropdown(query = ''): void {
   const list = dom.searchDropdownList;
   if (!list) return;
-  // 历史记录按当前生效平台过滤：氚云/云枢区分展示
+  // 历史记录按当前生效平台过滤：氚云/云枢区分展示（结合 pageType + 默认路径对比推断）
   const activePlatform = getActivePlatformKey();
   const platformRecords = state.recentDirectories.filter(
-    (r) => getPlatformKeyFromPageType(r.pageType ?? '') === activePlatform,
+    (r) => resolveRecentEntryPlatform(r, state.config) === activePlatform,
   );
   const filtered = filterHistoryRecords(query, platformRecords);
 
@@ -395,12 +438,18 @@ function renderSearchDropdown(query = ''): void {
       ? '<div class="search-empty">暂无匹配目录</div>'
       : '<div class="search-empty">暂无历史目录</div>';
   } else {
-    list.innerHTML = filtered.map((d, i) => `
-      <div class="search-item" data-index="${i}" data-path="${escapeHtml(d.path)}">
-        <span class="search-item-path">${escapeHtml(extractLastFolderName(d.path))}</span>
-        <button class="search-item-remove" data-remove="${escapeHtml(d.path)}" title="删除">×</button>
-      </div>
-    `).join('');
+    list.innerHTML = filtered.map((d, i) => {
+      const platform = resolveRecentEntryPlatform(d, state.config);
+      const badgeClass = platform === 'h3yun' ? 'badge-h3yun' : 'badge-cloudpivot';
+      const badgeLabel = platform === 'h3yun' ? '氚云' : '云枢';
+      return `
+        <div class="search-item" data-index="${i}" data-path="${escapeHtml(d.path)}">
+          <span class="search-item-platform ${badgeClass}">${badgeLabel}</span>
+          <span class="search-item-path">${escapeHtml(extractLastFolderName(d.path))}</span>
+          <button class="search-item-remove" data-remove="${escapeHtml(d.path)}" title="删除">×</button>
+        </div>
+      `;
+    }).join('');
   }
 
   // 控制 HTML 中已有的"清空历史记录"区域（#search-dropdown-clear）

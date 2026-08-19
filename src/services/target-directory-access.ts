@@ -78,11 +78,14 @@ type ExtendedDirectoryHandle = FileSystemDirectoryHandle & {
 };
 
 function showDirPicker(): Promise<FileSystemDirectoryHandle> {
-  const w = window as unknown as { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> };
+  const w = window as unknown as {
+    showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+  };
   if (typeof w.showDirectoryPicker !== 'function') {
     throw new ValidationError('showDirectoryPicker not available', { available: false });
   }
-  return w.showDirectoryPicker();
+  // 选择时直接请求读写权限：授权状态由浏览器缓存，后续操作从缓存获取，避免首次回写失败
+  return w.showDirectoryPicker({ mode: 'readwrite' });
 }
 
 function requestHandlePermission(
@@ -128,6 +131,13 @@ export async function selectHandleDirectory(
 
   try {
     const handle = await showDirPicker();
+    // 选择后立即确认读写权限已授予（showDirectoryPicker({ mode: 'readwrite' }) 会弹浏览器自带授权，
+    // 授权状态写入浏览器缓存，后续 queryPermission/requestPermission 直接复用缓存）
+    const permission = await requestHandlePermission(handle, 'readwrite');
+    if (permission !== 'granted') {
+      logger.warn('Directory readwrite permission not granted', { pageType, permission });
+      return null;
+    }
     await saveHandleSelection(handle, tab, pageType);
     return { path: '', source: 'handle', label: handle.name || '' };
   } catch (error: unknown) {

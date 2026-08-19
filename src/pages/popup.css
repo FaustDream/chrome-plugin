@@ -434,6 +434,26 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 平台徽标：历史目录归属云枢/氚云标识 */
+.search-item-platform {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-micro);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5;
+}
+
+.search-item-platform.badge-cloudpivot {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+.search-item-platform.badge-h3yun {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
 .search-item-path {
   font-size: var(--font-size-body-sm);
   color: var(--color-text-secondary);

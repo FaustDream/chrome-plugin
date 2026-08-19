@@ -76,8 +76,8 @@ export async function getStoredDirectoryPath(
     return pageTypePath;
   }
 
-  // 3) 全局上次选择目录（跨页面 / 跨平台共享，优先于设置里的默认目录）
-  const lastSelection = await getLastDirectorySelection();
+  // 3) 平台上次选择目录（同平台跨页类型共享，避免云枢/氚云互相覆盖）
+  const lastSelection = await getLastDirectorySelection(pageType);
   if (lastSelection) {
     await saveTargetDirectoryPathByScope(pageScope, lastSelection.label);
     return lastSelection.label;
@@ -114,8 +114,13 @@ export async function saveHandleSelection(
 
   const label = handle.name || '';
   await addRecentTargetDirectory(label, pageType);
-  // 记录全局「上次选择目录」，跨页面 / 跨平台共享，避免下次回退到默认目录
+  // 记录平台「上次选择目录」，同平台新页面回显，避免云枢/氚云互相覆盖
   await saveLastDirectorySelection(label, pageType);
+
+  // 同步当前页面 scope 快照，确保 popup 重开后仍命中该目录（否则第 1 步会回退到旧快照）
+  if (pageScope) {
+    await saveTargetDirectoryPathByScope(pageScope, label);
+  }
 
   return { handleModeSelected: true, path: '', label };
 }
@@ -135,8 +140,8 @@ export async function resolveTargetDirectoryHandle(
   const handle = await getTargetDirectoryHandle(pageType);
   if (handle) return handle;
 
-  // 2) 全局上次选择目录的 pageType 句柄（跨页面共享）
-  const lastSelection = await getLastDirectorySelection();
+  // 2) 平台上次选择目录的 pageType 句柄（同平台跨页面共享）
+  const lastSelection = await getLastDirectorySelection(pageType);
   if (lastSelection && lastSelection.pageType !== pageType) {
     const lastHandle = await getTargetDirectoryHandle(lastSelection.pageType);
     if (lastHandle) return lastHandle;

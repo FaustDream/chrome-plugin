@@ -4,13 +4,38 @@
  * 基于 chrome.storage.local 持久化，不设数量上限，按 path 去重、时间降序排列。
  */
 import { STORAGE_KEYS } from '../lib/constants.js';
-import { normalizePath } from '../lib/utils.js';
-import { getPlatformKeyFromPageType } from './config.js';
+import { normalizePath, extractLastFolderName } from '../lib/utils.js';
+import { getPlatformKeyFromPageType, getFallbackDirectoryPathByPlatform } from './config.js';
+import type { ExtensionConfig } from '../types/config.js';
+import type { PlatformKey } from '../types/platform.js';
 
 export interface RecentDirectoryEntry {
   readonly path: string;
   readonly pageType: string;
   readonly lastUsedAt: number;
+}
+
+/**
+ * 解析历史目录归属平台：
+ * 1) pageType 明确（非 default）→ 直接按 pageType 归属
+ * 2) pageType 缺失 / 为 default（旧数据或未识别页面）→ 用目录名与设置中的
+ *    默认目录路径末级目录名对比，匹配到云枢/氚云默认目录即归属对应平台
+ * 3) 仍无法判断 → 兜底归云枢
+ */
+export function resolveRecentEntryPlatform(
+  entry: RecentDirectoryEntry,
+  config: ExtensionConfig | null,
+): PlatformKey {
+  const rawType = String(entry.pageType || '').trim().toLowerCase();
+  if (rawType && rawType !== 'default') {
+    return getPlatformKeyFromPageType(rawType);
+  }
+  const dirName = extractLastFolderName(entry.path);
+  const cpPath = config ? getFallbackDirectoryPathByPlatform(config, 'cloudpivot') : '';
+  const hyPath = config ? getFallbackDirectoryPathByPlatform(config, 'h3yun') : '';
+  if (cpPath && extractLastFolderName(cpPath) === dirName) return 'cloudpivot';
+  if (hyPath && extractLastFolderName(hyPath) === dirName) return 'h3yun';
+  return getPlatformKeyFromPageType(rawType);
 }
 
 function normalizeTimestamp(value: unknown): number {
@@ -113,9 +138,12 @@ export async function clearAllRecentTargetDirectories(): Promise<RecentDirectory
   return [];
 }
 
-/** 清空指定平台的历史目录记录（按 pageType 归属平台过滤） */
-export async function clearRecentTargetDirectoriesByPlatform(platformKey: string): Promise<RecentDirectoryEntry[]> {
+/** 清空指定平台的历史目录记录（按 pageType + 默认路径对比推断平台过滤） */
+export async function clearRecentTargetDirectoriesByPlatform(
+  platformKey: string,
+  config: ExtensionConfig | null,
+): Promise<RecentDirectoryEntry[]> {
   const records = await loadRecords();
-  const next = records.filter((r) => getPlatformKeyFromPageType(r.pageType ?? '') !== platformKey);
+  const next = records.filter((r) => resolveRecentEntryPlatform(r, config) !== platformKey);
   return saveRecords(next);
 }
