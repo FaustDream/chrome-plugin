@@ -6,7 +6,7 @@
  */
 
 /** 当前扩展版本号（单源） */
-export const CURRENT_EXTENSION_VERSION = '2.0.0';
+export const CURRENT_EXTENSION_VERSION = '2.0.5';
 
 /** 版本更新说明（新的在前） */
 export const RELEASE_NOTES: readonly string[] = [
