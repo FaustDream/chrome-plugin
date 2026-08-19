@@ -3,7 +3,7 @@
   "name": "开发助手",
   "short_name": "开发助手",
   "description": "为云枢和氚云开发页面提供本地代码抓取、回写和目录协作能力。",
-  "version": "2.0.0",
+  "version": "2.0.5",
   "author": "凌致",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1SVnDMAPqPO40Br60I2mxLrNnE0BP2pVA7iyMy99hBcozh7d4DbnvyK53zO+BUeZKexqqppsTL/nBnqZem3ESoMraOqb3tMjMNVkpsErpipe9lmiUjdZQJEpeeBKlW8pHy2dZ478a/WDOxIxcCpRGFC943Zs2C63cewsbKKzrl06tF/teauEw7SV+DOxs8RgfATUa0kp+dKFNwD7rritdroy5TDtIIRXax68wVlUe+yIf4IjnQzJJllZHMVzAqd/Sxe4A3dc9HoFZgp5xVwD6oT5r50M0u3k9muLVvmyPhBI20fWNHRbexigFtiR21yBWxunkjtygyxz+QWZooSFEQIDAQAB",
   "icons": {

@@ -7,6 +7,7 @@ import { logger } from '../lib/logger.js';
 import { loadConfig, saveConfig, getFallbackDirectoryPathByPlatform, CLOUDPIVOT_READONLY_SETTINGS, H3YUN_READONLY_SETTINGS } from '../services/config.js';
 import { CONTROL_TYPE_REFERENCE, H3YUN_CONTROL_TYPE_REFERENCE } from '../lib/platform/control-metadata.js';
 import { buildDiagnosticPackage, saveLastDiagnosticPackage, loadLastDiagnosticPackage } from '../services/preflight-diagnostics.js';
+import { fetchLatestRelease, isUpToDate, hasNewerVersion, type LatestReleaseInfo } from '../services/update-checker.js';
 import { CURRENT_EXTENSION_VERSION } from '../lib/release-notes.js';
 
 // ── 工具 ──────────────────────────────────────────────
@@ -254,6 +255,75 @@ async function handleDiagExport(): Promise<void> {
   }
 }
 
+// ── 4.5 项目更新 ─────────────────────────────────────
+
+let latestRelease: LatestReleaseInfo | null = null;
+
+function renderUpdateResult(): void {
+  const resultEl = $('#update-result');
+  const statusEl = $('#update-status-text');
+  const actionsEl = $('#update-actions');
+  const downloadLink = $('#update-download-link') as HTMLAnchorElement | null;
+  const openLink = $('#update-open-link') as HTMLAnchorElement | null;
+  if (!resultEl || !statusEl || !actionsEl || !downloadLink || !openLink) return;
+
+  if (!latestRelease) {
+    resultEl.hidden = true;
+    actionsEl.hidden = true;
+    return;
+  }
+
+  resultEl.hidden = false;
+  // 始终把「前往下载页面」指向 GitHub Release 页（即使已是最新也可查看历史版本）
+  openLink.href = latestRelease.htmlUrl;
+
+  if (isUpToDate(latestRelease)) {
+    statusEl.textContent = `当前已是最新版本 v${CURRENT_EXTENSION_VERSION}，无需更新。`;
+    actionsEl.hidden = true;
+    return;
+  }
+
+  const published = latestRelease.publishedAt
+    ? new Date(latestRelease.publishedAt).toLocaleString('zh-CN')
+    : '未知';
+  statusEl.textContent = `发现新版本 v${latestRelease.version}（发布于 ${published}）。点击「下载最新版」保存 zip 安装包，或在浏览器中解压后侧载。`;
+  actionsEl.hidden = false;
+  if (latestRelease.zipUrl) {
+    downloadLink.href = latestRelease.zipUrl;
+    downloadLink.download = latestRelease.zipName || `${latestRelease.tagName}.zip`;
+    downloadLink.hidden = false;
+  } else {
+    downloadLink.hidden = true;
+  }
+}
+
+async function handleCheckUpdate(): Promise<void> {
+  const btn = $('#update-check-btn') as HTMLButtonElement | null;
+  if (!btn) return;
+  if (btn.classList.contains('is-running')) return;
+  btn.classList.add('is-running');
+  btn.disabled = true;
+  try {
+    latestRelease = await fetchLatestRelease();
+    renderUpdateResult();
+    showToast(
+      hasNewerVersion(latestRelease)
+        ? `发现新版本 v${latestRelease.version}`
+        : '已是最新版本',
+      hasNewerVersion(latestRelease) ? 'info' : 'success',
+    );
+  } catch (err: unknown) {
+    latestRelease = null;
+    renderUpdateResult();
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('检查更新失败', { error: msg });
+    showToast(`检查更新失败: ${msg}`, 'error');
+  } finally {
+    btn.classList.remove('is-running');
+    btn.disabled = false;
+  }
+}
+
 // ── 5. 保存 / 重置 ────────────────────────────────────
 
 async function handleSubmit(): Promise<void> {
@@ -370,6 +440,10 @@ function bindEvents(): void {
   $('#export-last-diagnostic-btn')?.addEventListener('click', () => { void handleDiagExportLast(); });
   $('#diag-export-btn')?.addEventListener('click', () => { void handleDiagExport(); });
 
+  // 项目更新
+  $('#update-check-btn')?.addEventListener('click', () => { void handleCheckUpdate(); });
+  // 「下载最新版」为原生 <a download href="zipUrl">，由浏览器直接下载，无需 JS 拦截
+
   // 使用说明平台切换
   for (const t of $$('[data-help-platform]')) {
     t.addEventListener('click', () => setActiveHelpPlatform(t.dataset.helpPlatform as 'cloudpivot' | 'h3yun'));
@@ -390,6 +464,10 @@ async function init(): Promise<void> {
   renderAllConfigUI(state.config);
   renderHelpSection();
   updateDiagnosticInfo();
+
+  // 项目更新：填充当前版本号
+  const curVerEl = $('#update-current-version');
+  if (curVerEl) curVerEl.textContent = `v${CURRENT_EXTENSION_VERSION}`;
 
   bindCollapse(state.collapseStateCache);
 

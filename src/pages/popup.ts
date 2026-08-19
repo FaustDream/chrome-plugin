@@ -239,7 +239,45 @@ async function updateDirectoryDisplay(): Promise<void> {
 async function handleSelectHistoryPath(path: string): Promise<void> {
   if (!path || state.busy) return;
   closeSearchDropdown();
-  // 历史记录点击：弹出目录选择对话框重新绑定
+
+  // 历史条目归属的 pageType：优先取条目自身记录，旧数据缺失时回退当前页面
+  const entry = state.recentDirectories.find((r) => r.path === path);
+  const targetPageType = entry?.pageType || state.pageTypeConfig?.pageType || 'default';
+
+  // 句柄仍有效：直接恢复该历史目录，无需重新选择
+  const permission = await getTargetDirectoryPermission(state.pageContext, targetPageType);
+  if (permission === 'granted') {
+    // 跨 pageType 时把历史句柄绑定到当前页面，保证后续读写落到该目录
+    const currentPageType = state.pageTypeConfig?.pageType || 'default';
+    if (targetPageType !== currentPageType) {
+      const handle = await getTargetDirectoryHandle(targetPageType);
+      if (handle) await saveHandleSelection(handle, state.pageContext, currentPageType);
+    }
+    state.currentDirectoryPath = path;
+    state.currentDirectoryLabel = extractLastFolderName(path);
+    await updateDirectoryDisplay();
+    addSuccessLog(`已恢复历史目录: ${state.currentDirectoryLabel || path}`);
+    return;
+  }
+
+  // 权限非 granted：优先尝试一键恢复授权（浏览器授权弹窗，已授权过则直接 granted 不弹窗）
+  addLog(`历史目录「${extractLastFolderName(path)}」需要重新授权，正在请求授权...`, 'warning');
+  const granted = await requestTargetDirectoryPermission(state.pageContext, targetPageType);
+  if (granted === 'granted') {
+    const currentPageType = state.pageTypeConfig?.pageType || 'default';
+    if (targetPageType !== currentPageType) {
+      const handle = await getTargetDirectoryHandle(targetPageType);
+      if (handle) await saveHandleSelection(handle, state.pageContext, currentPageType);
+    }
+    state.currentDirectoryPath = path;
+    state.currentDirectoryLabel = extractLastFolderName(path);
+    await updateDirectoryDisplay();
+    addSuccessLog(`目录已重新授权并恢复: ${state.currentDirectoryLabel || path}`);
+    return;
+  }
+
+  // 无句柄或用户拒绝授权：弹出目录选择对话框重新绑定
+  addLog(`历史目录「${extractLastFolderName(path)}」无法恢复，请重新选择目录`, 'warning');
   await handleRefreshDirectory();
 }
 
@@ -279,27 +317,11 @@ async function handleCopyPath(): Promise<void> {
   }
 }
 
-/** 「更新当前路径」：优先对已选目录一键重新授权，未绑定句柄时再弹出目录选择对话框 */
+/** 「更新当前路径」：直接弹出目录选择对话框重新绑定 */
 async function handleRefreshDirectory(): Promise<void> {
   if (state.busy) return;
   await runWithButtonBusy(dom.refreshHandleBtn, async () => {
     const pageType = state.pageTypeConfig?.pageType || 'default';
-
-    // 浏览器重启后句柄权限会失效（denied/prompt），优先尝试一键重新授权，避免重新选择目录
-    const permission = await getTargetDirectoryPermission(state.pageContext, pageType);
-    if (permission === 'prompt' || permission === 'denied') {
-      addLog('检测到上次选择的目录需要重新授权，正在请求授权...');
-      const granted = await requestTargetDirectoryPermission(state.pageContext, pageType);
-      if (granted === 'granted') {
-        const path = await getStoredDirectoryPath(state.pageContext, pageType);
-        state.currentDirectoryPath = path;
-        state.currentDirectoryLabel = extractLastFolderName(path);
-        await updateDirectoryDisplay();
-        addSuccessLog(`目录已重新授权: ${state.currentDirectoryLabel || path}`);
-        return;
-      }
-      addLog('授权未完成，将弹出目录选择对话框重新绑定', 'warning');
-    }
 
     addLog('正在弹出目录选择对话框...');
     const result = await selectAndBindDirectory(state.pageContext, {
@@ -1222,7 +1244,7 @@ async function init(): Promise<void> {
     if (permission === 'prompt' || permission === 'denied') {
       addWarningLog(
         `上次选择的目录「${state.currentDirectoryLabel || state.currentDirectoryPath}」需要重新授权`,
-        '请点击「更新当前路径」一键重新授权，无需重新选择目录',
+        '请点击「更新当前路径」重新选择目录',
       );
     }
   }

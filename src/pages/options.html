@@ -54,6 +54,10 @@
               <svg class="sidebar-item-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               <span>使用说明</span>
             </li>
+            <li class="sidebar-item" data-nav-target="update">
+              <svg class="sidebar-item-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/></svg>
+              <span>项目更新</span>
+            </li>
           </ul>
         </nav>
 
@@ -223,6 +227,36 @@
             <div class="help-rules">
               <h4>内置规则</h4>
               <ul id="h3yun-rules-list" class="help-rules-list"></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 项目更新：检查 GitHub Releases 最新版本并下载 -->
+      <section class="section" data-section="update">
+        <div class="section-head" role="button" tabindex="0" aria-expanded="true">
+          <span class="section-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/></svg>
+          </span>
+          <span class="section-arrow">▲</span>
+          <h2 class="section-title">项目更新</h2>
+          <p class="section-desc">检查 GitHub 上是否有新版本，一键下载 zip 安装包。</p>
+        </div>
+        <div class="section-body">
+          <div class="diag-info-row">
+            <span class="diag-label">当前版本</span>
+            <span class="diag-value" id="update-current-version">—</span>
+          </div>
+
+          <div class="action-row">
+            <button id="update-check-btn" class="ghost-btn-sm" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/></svg> 检查更新</button>
+          </div>
+
+          <div class="update-result" id="update-result" hidden>
+            <p class="update-status-text" id="update-status-text"></p>
+            <div class="update-actions" id="update-actions" hidden>
+              <a id="update-download-link" class="save-btn btn-link" href="#" download><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 下载最新版</a>
+              <a id="update-open-link" class="ghost-btn-sm btn-link" href="#" target="_blank" rel="noopener noreferrer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg> 前往下载页面</a>
             </div>
           </div>
         </div>

@@ -648,6 +648,26 @@ body {
   margin: var(--spacing-md) 0;
 }
 
+/* ========== 项目更新 ========== */
+.update-result {
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-md);
+  border: 1px solid var(--color-border-card);
+  border-radius: var(--radius-lg);
+  background: var(--bg-input);
+}
+
+.update-result[hidden] {
+  display: none;
+}
+
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
 /* ========== 文件生成区域 ========== */
 .genfiles-area {
   margin-bottom: var(--spacing-sm);
@@ -1114,6 +1134,25 @@ button:disabled {
 
 .ghost-btn-sm.is-reset::before {
   content: "✓";
+}
+
+/* 链接型按钮：让 <a> 复用按钮视觉（对齐、间距、去下划线） */
+.btn-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  box-sizing: border-box;
+  transition: all var(--transition-fast);
+}
+
+.btn-link:hover {
+  transform: translateY(-1px);
 }
 
 /* 按钮加载动画 */
