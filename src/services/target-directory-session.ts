@@ -2,11 +2,20 @@
  * 页面级目录快照与会话管理。
  *
  * 基于 chrome.storage.local 持久化页面级目录路径和快照标记，
- * 按 `tabId + pageType + URL hash` 区分不同已打开页面。
+ * 按「页面业务实例唯一标识（pageId）+ pageType」区分不同页面。
+ *
+ * pageId 不使用「路由地址」（URL 可能携带 token/时间戳等动态 query，
+ * 导致同一业务实例每次打开 URL 不同、无法命中已保存路径），
+ * 而是从 URL 提取稳定的业务实例标识：
+ * - 云枢：applicationCode/formCode（model=应用编码/表单编码）
+ * - 氚云：设计器 id
+ * 由此形成 pageId → 目录路径 的一一对应。
  */
 
 import { normalizePath } from '../lib/utils.js';
-import { FNV1A_OFFSET_BASIS, FNV1A_PRIME, PAGE_TYPE_DEFAULT, STORAGE_KEYS } from '../lib/constants.js';
+import { FNV1A_OFFSET_BASIS, FNV1A_PRIME, PAGE_TYPE_DEFAULT } from '../lib/constants.js';
+import { parseModelCodesFromPageUrl } from '../lib/platform/readme-parser.js';
+import { extractH3yunDesignerId } from '../lib/platform/h3yun-code.js';
 
 // ── 存储键 ────────────────────────────────────────────
 
@@ -82,35 +91,62 @@ interface TabInfo {
   readonly pendingUrl?: string;
 }
 
-/** 为标签页中的具体页面生成目录快照 scope */
-export function createTargetDirectoryPageScope(tab: TabInfo | number, pageType: string): string {
-  const tabId = typeof tab === 'object' ? (tab.id ?? tab.tabId) : tab;
-  const pageUrl = typeof tab === 'object' ? (tab.url || tab.pendingUrl || '') : '';
-  const normalizedTabId = String(tabId ?? '').trim();
-  if (!normalizedTabId) return '';
+/**
+ * 从 URL 提取页面业务实例标识（pageId）。
+ * 优先取稳定的业务实例标识；取不到时退回 URL pathname 特征（排除动态 query）。
+ */
+function buildPageInstanceId(pageUrl: string, pageType: string): string {
+  const normalizedPageType = normalizePageType(pageType);
 
-  return `tab:${normalizedTabId}:${normalizePageType(pageType)}:${hashScopePart(pageUrl)}`;
+  // 氚云：以设计器 id 作为业务实例标识
+  if (normalizedPageType.startsWith('h3yun')) {
+    const designerId = extractH3yunDesignerId(pageUrl);
+    if (designerId) return `h3:${hashScopePart(designerId)}`;
+  } else {
+    // 云枢：以 applicationCode/formCode 作为业务实例标识
+    const { applicationCode, formCode } = parseModelCodesFromPageUrl(pageUrl);
+    if (applicationCode || formCode) {
+      return `model:${hashScopePart(`${applicationCode}/${formCode}`)}`;
+    }
+  }
+
+  // 兜底：无法提取业务实例标识时，退回 pathname 特征（排除 token/时间戳等动态 query）
+  return `url:${hashScopePart(extractStablePathPart(pageUrl))}`;
+}
+
+/** 提取 URL 稳定路径部分（仅 pathname，排除动态 query / hash） */
+function extractStablePathPart(pageUrl: string): string {
+  try {
+    return new URL(pageUrl).pathname;
+  } catch {
+    return String(pageUrl || '');
+  }
+}
+
+/**
+ * 为具体页面生成稳定目录 scope（按「页面业务实例标识」隔離，不含 tabId）。
+ *
+ * 关键：pageId 使用业务实例唯一标识（表单编码 / 设计器 id），
+ * 而非「路由地址」整条 URL。这样：
+ * - 同一表单设计器打开不同表单（表单A / 表单B）会产生不同 pageId，互不串用；
+ * - URL 携带 token/时间戳等动态参数时，同一业务实例仍命中同一 scope，
+ *   刷新 / 重开标签页后依旧恢复该页面之前保存的目录路径。
+ */
+export function createTargetDirectoryPageScope(tab: TabInfo | number, pageType: string): string {
+  const pageUrl = typeof tab === 'object' ? (tab.url || tab.pendingUrl || '') : '';
+  const normalizedPageType = normalizePageType(pageType);
+
+  if (pageUrl) {
+    return `page:${normalizedPageType}:${buildPageInstanceId(pageUrl, normalizedPageType)}`;
+  }
+
+  // 兜底：无 URL（仅 tabId）时按标签维度隔离
+  const tabId = typeof tab === 'object' ? (tab.id ?? tab.tabId) : tab;
+  const normalizedTabId = String(tabId ?? '').trim();
+  return normalizedTabId ? `tab:${normalizedTabId}:${normalizedPageType}` : '';
 }
 
 // ── 公开 API ──────────────────────────────────────────
-
-/** 读取页面级绝对路径快照 */
-export async function getTargetDirectoryPathByScope(pageScope: string): Promise<string> {
-  const key = normalizeScopeKey(pageScope);
-  if (!key) return '';
-
-  const paths = await loadPagePaths();
-  return normalizePath(paths[key]);
-}
-
-/** 判断页面 scope 是否已有快照 */
-export async function hasTargetDirectoryScopeSnapshot(pageScope: string): Promise<boolean> {
-  const key = normalizeScopeKey(pageScope);
-  if (!key) return false;
-
-  const snapshots = await loadPageSnapshots();
-  return Boolean(snapshots[key]);
-}
 
 /** 标记页面 scope 已完成快照 */
 export async function markTargetDirectoryScopeSnapshot(pageScope: string): Promise<void> {

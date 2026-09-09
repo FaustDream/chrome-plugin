@@ -1,52 +1,20 @@
 /**
- * 目录选择与路径解析状态聚合。
+ * 目录选择与句柄解析状态（仅页面 scope 记忆）。
  *
- * 三级回退逻辑：
- *  1) 页面级快照（scope 精确匹配当前 tab+URL）
- *  2) 全局页类型默认（同一 pageType 共享）
- *  3) 平台兜底路径（云枢 / 氚云 fallback）
- *
- * 管理 Handle 通道的目录句柄状态。
+ * 新版语义（替代旧版三级回退）：
+ * - 目录记忆粒度 = 页面业务实例(scope)，页面间永不串用；
+ * - 新页面(无 scope 绑定)强制手动选择「更新当前路径」或从历史恢复，
+ *   不再自动绑定任何全局/平台级"上次选择目录"；
+ * - 展示路径与读写句柄均以 scope 句柄为唯一权威，杜绝显示/写入不一致；
+ * - 旧共享槽（pageType 全局句柄、平台 LAST_DIRECTORY）已整体退役，
+ *   通过 cleanupLegacyDirectoryData() 在扩展启动时清理。
  */
 
 import { logger } from '../lib/logger.js';
-import { normalizePath } from '../lib/utils.js';
-import { createTargetDirectoryPageScope, getTargetDirectoryPathByScope, saveTargetDirectoryPathByScope, clearTargetDirectoryPathsByScopePrefix, clearTargetDirectorySnapshotsByScopePrefix } from './target-directory-session.js';
-import { getTargetDirectoryHandle, getTargetDirectoryHandleForScope, clearTargetDirectoryHandleForScope, saveTargetDirectoryHandle, clearTargetDirectoryHandlesByScopePrefix } from '../lib/directory/file-handle-db.js';
-import {
-  loadConfig,
-  getTargetDirectoryPathByPageType,
-  saveTargetDirectoryPathByPageType,
-  getFallbackDirectoryPathByPlatform,
-  getPlatformKeyFromPageType,
-} from './config.js';
-import { mergeRecentTargetDirectories, normalizeRecentTargetDirectories, addRecentTargetDirectory } from './recent-target-directories.js';
-import { getLastDirectorySelection, saveLastDirectorySelection } from './last-directory.js';
-import type { PlatformKey } from '../types/platform.js';
-
-// ── 内部工具 ──────────────────────────────────────────
-
-// ── Handle 通道状态管理 ───────────────────────────────
-
-interface HandleState {
-  readonly handleModeSelected: boolean;
-  readonly path: string;
-  readonly label: string;
-}
-
-async function getHandleState(pageType: string): Promise<HandleState> {
-  try {
-    const handle = await getTargetDirectoryHandle(pageType);
-    if (handle) {
-      return { handleModeSelected: true, path: '', label: handle.name || '' };
-    }
-  } catch (_error: unknown) {
-    logger.warn('Failed to get target directory handle', { pageType });
-  }
-  return { handleModeSelected: false, path: '', label: '' };
-}
-
-// ── 三级回退路径解析 ──────────────────────────────────
+import { STORAGE_KEYS } from '../lib/constants.js';
+import { createTargetDirectoryPageScope, saveTargetDirectoryPathByScope, clearTargetDirectoryPathsByScopePrefix, clearTargetDirectorySnapshotsByScopePrefix } from './target-directory-session.js';
+import { getTargetDirectoryHandleForScope, clearTargetDirectoryHandleForScope, saveTargetDirectoryHandleForScope, clearTargetDirectoryHandlesByScopePrefix, clearAllTargetDirectoryHandles } from '../lib/directory/file-handle-db.js';
+import { addRecentTargetDirectory } from './recent-target-directories.js';
 
 interface TabInfo {
   readonly id?: number;
@@ -54,71 +22,45 @@ interface TabInfo {
   readonly pendingUrl?: string;
 }
 
+// ── 仅 scope 路径解析 ───────────────────────────────
+
 /**
- * 按 scope 三级回退获取页面已绑定目录路径：
- * scope → pageType 全局默认 → 平台 fallback
+ * 获取页面当前绑定目录的展示路径（目录名）。
+ *
+ * 只认 page scope 句柄（权威）：句柄存在即返回其目录名；否则返回 ''，
+ * 不经过任何全局/平台回退，保证「展示 = 写入」。
  */
 export async function getStoredDirectoryPath(
   tab: TabInfo | number,
-  pageType: string,
+  _pageType: string,
 ): Promise<string> {
-  const pageScope = createTargetDirectoryPageScope(tab, pageType);
+  const pageScope = createTargetDirectoryPageScope(tab, _pageType);
+  if (!pageScope) return '';
 
-  // 1) 页面级快照
-  const scopedPath = await getTargetDirectoryPathByScope(pageScope);
-  if (scopedPath) return scopedPath;
-
-  // 2) 全局页类型默认
-  const pageTypePath = await getTargetDirectoryPathByPageType(pageType);
-  if (pageTypePath) {
-    // 同时为此页面建立快照
-    await saveTargetDirectoryPathByScope(pageScope, pageTypePath);
-    return pageTypePath;
-  }
-
-  // 3) 平台上次选择目录（同平台跨页类型共享，避免云枢/氚云互相覆盖）
-  const lastSelection = await getLastDirectorySelection(pageType);
-  if (lastSelection) {
-    await saveTargetDirectoryPathByScope(pageScope, lastSelection.label);
-    return lastSelection.label;
-  }
-
-  // 4) 平台兜底路径
-  const config = await loadConfig();
-  const platformKey = getPlatformKeyFromPageType(pageType) as PlatformKey;
-  const fallbackPath = getFallbackDirectoryPathByPlatform(config, platformKey);
-  if (fallbackPath) {
-    await saveTargetDirectoryPathByScope(pageScope, fallbackPath);
-  }
-  return fallbackPath;
+  const scopeHandle = await getTargetDirectoryHandleForScope(pageScope);
+  return scopeHandle?.name || '';
 }
 
 // ── 选择目录后同步落库 ────────────────────────────────
 
 /**
- * 选择 Handle 目录后同步存储：
- * - global: save → 更新页类型全局 Handle + 清空路径状态
+ * 选择 Handle 目录后绑定到当前页面 scope：
+ * - 仅写「页面级句柄 + 页面级路径 + 最近使用历史」，不写任何全局/平台共享槽
+ *   （旧版会覆盖 pageType 全局句柄与 LAST_DIRECTORY，导致多页面互相污染）。
+ * - 展示与读写均通过 scope 句柄解析，后续不会被其他页面的选择覆盖。
  */
 export async function saveHandleSelection(
   handle: FileSystemDirectoryHandle,
   tab: TabInfo | number,
   pageType = 'default',
-): Promise<HandleState> {
+): Promise<{ handleModeSelected: boolean; path: string; label: string }> {
   const pageScope = createTargetDirectoryPageScope(tab, pageType);
 
-  // 保存 Handle 到页类型全局
-  await saveTargetDirectoryHandle(handle, pageType);
-
-  // 清空路径通道的旧状态（反冗余）
-  await saveTargetDirectoryPathByPageType(pageType, '');
-
   const label = handle.name || '';
-  await addRecentTargetDirectory(label, pageType);
-  // 记录平台「上次选择目录」，同平台新页面回显，避免云枢/氚云互相覆盖
-  await saveLastDirectorySelection(label, pageType);
-
-  // 同步当前页面 scope 快照，确保 popup 重开后仍命中该目录（否则第 1 步会回退到旧快照）
+  await addRecentTargetDirectory(label, pageType, pageScope || undefined);
   if (pageScope) {
+    // 绑定页面级句柄 + 路径快照（目录名）
+    await saveTargetDirectoryHandleForScope(handle, pageScope);
     await saveTargetDirectoryPathByScope(pageScope, label);
   }
 
@@ -126,35 +68,21 @@ export async function saveHandleSelection(
 }
 
 /**
- * 解析当前有效的目录句柄（跨页面共享）。
- * 回退顺序：
- *  1) 当前 pageType 全局句柄
- *  2) 全局上次选择目录对应的 pageType 句柄（跨页面 / 跨平台兜底）
- *  3) 页面级 scope 句柄
+ * 解析当前页面已绑定的目录句柄。
+ * 回退顺序与 getStoredDirectoryPath（展示）保持一致：
+ *  1) 当前页面的 scope 句柄（唯一来源）
+ *  2) 无 → undefined（页面未绑定，写入方上报「请先选择目录」）
+ *
+ * 关键：不再回退到 页类型全局句柄 / 平台上次选择目录，
+ * 避免页面 A 被页面 B 最后选择的目录覆盖（旧版污染根源）。
  */
 export async function resolveTargetDirectoryHandle(
   tab: TabInfo | number,
   pageType: string,
 ): Promise<FileSystemDirectoryHandle | undefined> {
-  // 1) 当前 pageType 全局句柄
-  const handle = await getTargetDirectoryHandle(pageType);
-  if (handle) return handle;
-
-  // 2) 平台上次选择目录的 pageType 句柄（同平台跨页面共享）
-  const lastSelection = await getLastDirectorySelection(pageType);
-  if (lastSelection && lastSelection.pageType !== pageType) {
-    const lastHandle = await getTargetDirectoryHandle(lastSelection.pageType);
-    if (lastHandle) return lastHandle;
-  }
-
-  // 3) 页面级 scope 句柄
   const pageScope = createTargetDirectoryPageScope(tab, pageType);
-  if (pageScope) {
-    const scopedHandle = await getTargetDirectoryHandleForScope(pageScope);
-    if (scopedHandle) return scopedHandle;
-  }
-
-  return undefined;
+  if (!pageScope) return undefined;
+  return getTargetDirectoryHandleForScope(pageScope);
 }
 
 // ── 标签页关闭清理 ────────────────────────────────────
@@ -167,7 +95,7 @@ export async function clearTabTargetDirectoryData(
   tabId: number,
   pageType = 'default',
 ): Promise<void> {
-  const suffix = `${normalizePath(pageType)}:`;
+  const suffix = `${String(pageType || '').trim()}:`;
 
   // 清理 Handle 通道数据
   await clearTargetDirectoryHandlesByScopePrefix(`tab:${tabId}:`);
@@ -179,4 +107,32 @@ export async function clearTabTargetDirectoryData(
   await clearTargetDirectorySnapshotsByScopePrefix(`tab:${tabId}:${suffix}`);
 
   logger.debug('Cleared target directory data for tab', { tabId, pageType });
+}
+
+// ── 旧共享槽迁移清洗（启动时幂等执行） ─────────────────
+
+/**
+ * 清理旧版「共享槽」遗留数据，防止继续污染新逻辑：
+ * - IndexedDB：页类型全局句柄（target-directory:<pageType>）
+ * - chrome.storage.local：
+ *   - LAST_DIRECTORY（平台「上次选择目录」，仅存目录名不可靠）
+ *   - targetDirectoryPageTypePaths（页类型全局路径）
+ *   - targetDirectoryPagePaths / targetDirectoryPageSnapshots（旧假 scope 路径快照）
+ *
+ * 保留：页面级 scope 句柄（历史恢复依赖）、平台默认目录句柄、最近使用历史列表。
+ * 幂等：数据不存在时删除无副作用。
+ */
+export async function cleanupLegacyDirectoryData(): Promise<void> {
+  try {
+    await clearAllTargetDirectoryHandles();
+    await chrome.storage.local.remove([
+      STORAGE_KEYS.LAST_DIRECTORY,
+      'targetDirectoryPageTypePaths',
+      'targetDirectoryPagePaths',
+      'targetDirectoryPageSnapshots',
+    ]);
+    logger.info('Cleaned up legacy shared directory slots');
+  } catch (error: unknown) {
+    logger.warn('Legacy directory cleanup failed', { error: String(error) });
+  }
 }

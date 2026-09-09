@@ -33,18 +33,17 @@ import {
   clearRecentTargetDirectoriesByPlatform,
   resolveRecentEntryPlatform,
 } from '../services/recent-target-directories.js';
-import { getStoredDirectoryPath, saveHandleSelection } from '../services/target-directory-state.js';
-import { saveLastDirectorySelection } from '../services/last-directory.js';
+import { getStoredDirectoryPath, saveHandleSelection, resolveTargetDirectoryHandle } from '../services/target-directory-state.js';
 import {
   selectAndBindDirectory,
   writeFilesToSelection,
   readFilesFromSelection,
   fileExistsInSelection,
   getTargetDirectoryPermission,
-  requestTargetDirectoryPermission,
+  queryHandlePermissionState,
+  requestHandlePermissionState,
 } from '../services/target-directory-access.js';
-import { getTargetDirectoryHandle } from '../lib/directory/file-handle-db.js';
-import { createTargetDirectoryPageScope, saveTargetDirectoryPathByScope } from '../services/target-directory-session.js';
+import { getTargetDirectoryHandleForScope } from '../lib/directory/file-handle-db.js';
 import { buildMissingWorkspaceDocumentFiles, WORKSPACE_DOCUMENT_FILE_NAMES } from '../services/workspace-documents.js';
 import {
   createPreflightResult,
@@ -233,65 +232,63 @@ async function updateDirectoryDisplay(): Promise<void> {
   }
   if (dom.currentPathTag) {
     dom.currentPathTag.textContent = path ? (label || path) : '未选择目录';
-    dom.currentPathTag.title = path || '';
+    dom.currentPathTag.title = path
+      ? path
+      : '请点击「更新当前路径」选择本地目录，或从历史目录中搜索恢复';
   }
 }
 
 // ── Directory Selection ────────────────────────────────
 
 /**
- * 恢复历史目录后同步持久化：更新平台「最后选择目录」+ 当前页面 scope 快照。
- * 确保 popup 关闭重开后仍回显恢复的目录（否则会回退到旧的 lastSelection / 旧快照）。
+ * 恢复历史目录：通过历史记录中的 scope 精确定位 IndexedDB 中的页面级句柄，
+ * 直接在该句柄上检查/请求权限（而非通过 resolveTargetDirectoryHandle 的 scope 解析，
+ * 后者可能命中当前页面已绑定的其他句柄），然后通过 saveHandleSelection 绑定到当前页面。
+ *
+ * 这保证了：显示路径 = scope 句柄 = 实际写入句柄，三者完全一致。
  */
-async function persistRecoveredDirectory(path: string, pageType: string): Promise<void> {
-  await saveLastDirectorySelection(path, pageType);
-  const pageScope = createTargetDirectoryPageScope(state.pageContext, pageType);
-  if (pageScope) await saveTargetDirectoryPathByScope(pageScope, path);
-}
-
 async function handleSelectHistoryPath(path: string): Promise<void> {
   if (!path || state.busy) return;
   closeSearchDropdown();
 
-  // 历史条目归属的 pageType：优先取条目自身记录，旧数据缺失时按推断平台映射默认 pageType
+  // 精确定位历史路径对应的句柄：仅用历史条目自身记录的 scope 从 IndexedDB
+  // 获取页面级句柄（句柄名必须与历史 path 一致，防止 scope 被其他目录覆盖后误恢复）。
+  // 不再回退 pageType 全局句柄——旧共享槽已退役，且该槽会被其他页面污染导致恢复落空。
   const entry = state.recentDirectories.find((r) => r.path === path);
-  const rawType = String(entry?.pageType || '').trim();
-  const targetPageType = rawType && rawType !== 'default'
-    ? rawType
-    : (resolveRecentEntryPlatform(entry ?? { path, pageType: '', lastUsedAt: 0 }, state.config) === 'h3yun'
-        ? 'h3yunDefault'
-        : 'default');
+  let handle: FileSystemDirectoryHandle | undefined;
+  if (entry?.scope) {
+    const scopedHandle = await getTargetDirectoryHandleForScope(entry.scope);
+    if (scopedHandle && scopedHandle.name === path) handle = scopedHandle;
+  }
+  if (!handle) {
+    addLog(`历史目录「${extractLastFolderName(path)}」句柄已失效，请重新选择目录`, 'warning');
+    await handleRefreshDirectory();
+    return;
+  }
 
-  // 句柄仍有效：直接恢复该历史目录，无需重新选择
-  const permission = await getTargetDirectoryPermission(state.pageContext, targetPageType);
+  // 直接在该句柄上检查权限（不经过 scope 解析，避免命中当前页面已绑定的其他句柄）
+  const permission = await queryHandlePermissionState(handle);
   if (permission === 'granted') {
-    // 跨 pageType 时把历史句柄绑定到当前页面，保证后续读写落到该目录
     const currentPageType = state.pageTypeConfig?.pageType || 'default';
-    if (targetPageType !== currentPageType) {
-      const handle = await getTargetDirectoryHandle(targetPageType);
-      if (handle) await saveHandleSelection(handle, state.pageContext, currentPageType);
-    }
-    state.currentDirectoryPath = path;
-    state.currentDirectoryLabel = extractLastFolderName(path);
-    await persistRecoveredDirectory(path, currentPageType);
+    await saveHandleSelection(handle, state.pageContext, currentPageType);
+    state.currentDirectoryPath = handle.name;
+    state.currentDirectoryLabel = handle.name;
     await updateDirectoryDisplay();
+    await loadRecentDirectories();
     addSuccessLog(`已恢复历史目录: ${state.currentDirectoryLabel || path}`);
     return;
   }
 
-  // 权限非 granted：优先尝试一键恢复授权（浏览器授权弹窗，已授权过则直接 granted 不弹窗）
+  // 权限失效，尝试重新授权（浏览器授权弹窗，已授权过则直接 granted 不弹窗）
   addLog(`历史目录「${extractLastFolderName(path)}」需要重新授权，正在请求授权...`, 'warning');
-  const granted = await requestTargetDirectoryPermission(state.pageContext, targetPageType);
+  const granted = await requestHandlePermissionState(handle);
   if (granted === 'granted') {
     const currentPageType = state.pageTypeConfig?.pageType || 'default';
-    if (targetPageType !== currentPageType) {
-      const handle = await getTargetDirectoryHandle(targetPageType);
-      if (handle) await saveHandleSelection(handle, state.pageContext, currentPageType);
-    }
-    state.currentDirectoryPath = path;
-    state.currentDirectoryLabel = extractLastFolderName(path);
-    await persistRecoveredDirectory(path, currentPageType);
+    await saveHandleSelection(handle, state.pageContext, currentPageType);
+    state.currentDirectoryPath = handle.name;
+    state.currentDirectoryLabel = handle.name;
     await updateDirectoryDisplay();
+    await loadRecentDirectories();
     addSuccessLog(`目录已重新授权并恢复: ${state.currentDirectoryLabel || path}`);
     return;
   }
@@ -338,33 +335,15 @@ async function handleCopyPath(): Promise<void> {
 }
 
 /**
- * 「更新当前路径」：三级阶梯
- * 1) 权限已 granted → 直接弹目录选择器（用户主动换目录）
- * 2) 已有句柄但权限失效（prompt/denied，如浏览器重启）→ 先一键授权（浏览器自带授权弹窗），
- *    授权成功直接恢复路径，避免重新选择目录导致首次回写失败
- * 3) 无句柄或授权失败 → 弹出目录选择对话框重新绑定
+ * 「更新当前路径」：始终直接弹出目录选择对话框重新绑定。
+ * 选择器默认打开当前环境已绑定的目录（target-directory-access 内部通过 startIn 处理）；
+ * 授权由 showDirectoryPicker({ mode:'readwrite' }) 在选择时一并完成，无需前置重新授权步骤。
  */
 async function handleRefreshDirectory(): Promise<void> {
   if (state.busy) return;
   await runWithButtonBusy(dom.refreshHandleBtn, async () => {
     const pageType = state.pageTypeConfig?.pageType
       || (getActivePlatformKey() === 'h3yun' ? 'h3yunDefault' : 'default');
-
-    // 已有句柄但权限失效：先尝试一键恢复授权（浏览器自带授权弹窗）
-    const permission = await getTargetDirectoryPermission(state.pageContext, pageType);
-    if (permission === 'prompt' || permission === 'denied') {
-      addLog('检测到目录需要重新授权，正在请求浏览器授权...', 'warning');
-      const granted = await requestTargetDirectoryPermission(state.pageContext, pageType);
-      if (granted === 'granted') {
-        const path = await getStoredDirectoryPath(state.pageContext, pageType);
-        state.currentDirectoryPath = path;
-        state.currentDirectoryLabel = extractLastFolderName(path);
-        await updateDirectoryDisplay();
-        addSuccessLog(`目录已重新授权并恢复: ${state.currentDirectoryLabel || path}`);
-        return;
-      }
-      addLog('授权未完成，将弹出目录选择对话框重新绑定', 'warning');
-    }
 
     addLog('正在弹出目录选择对话框...');
     const result = await selectAndBindDirectory(state.pageContext, {
@@ -1134,8 +1113,8 @@ async function runOperationWithPreflight(
     }));
   }
 
-  // Directory check
-  const handle = await getTargetDirectoryHandle(state.pageTypeConfig?.pageType || 'default');
+  // Directory check — 使用 scope 级解析（与实际写入路径一致），而非 pageType 全局
+  const handle = await resolveTargetDirectoryHandle(state.pageContext, state.pageTypeConfig?.pageType || 'default');
   const hasDirectory = Boolean(handle) || Boolean(state.currentDirectoryPath);
   results.push(createPreflightResult({
     operationId, checkId: 'directory.selected',

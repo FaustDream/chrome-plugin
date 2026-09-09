@@ -785,6 +785,11 @@ body {
   flex: 0 0 auto;
 }
 
+.default-dir-browse-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .h3yun-writeback-toggle {
   margin-top: var(--spacing-sm);
 }

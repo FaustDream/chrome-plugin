@@ -14,11 +14,7 @@ import { ValidationError } from '../errors.js';
 
 const HANDLE_KEY_PREFIX = 'target-directory';
 const PAGE_HANDLE_KEY_PREFIX = 'target-directory-page';
-
-function buildHandleKey(pageType: string): string {
-  const normalized = String(pageType || '').trim() || 'default';
-  return `${HANDLE_KEY_PREFIX}:${normalized}`;
-}
+const DEFAULT_HANDLE_KEY_PREFIX = 'target-directory-default';
 
 function normalizeScopeKey(scopeKey: string): string {
   return String(scopeKey || '').trim();
@@ -30,6 +26,14 @@ function buildPageHandleKey(pageScope: string): string {
     throw new ValidationError('页面目录句柄 scope 不能为空。', { scopeKey: pageScope });
   }
   return `${PAGE_HANDLE_KEY_PREFIX}:${normalized}`;
+}
+
+function buildDefaultHandleKey(platformKey: string): string {
+  const normalized = String(platformKey || '').trim();
+  if (!normalized) {
+    throw new ValidationError('默认目录 platformKey 不能为空。', { platformKey });
+  }
+  return `${DEFAULT_HANDLE_KEY_PREFIX}:${normalized}`;
 }
 
 // ── IndexedDB 底层 ────────────────────────────────────
@@ -83,24 +87,24 @@ async function withStore<T>(
 
 // ── 公开 API ──────────────────────────────────────────
 
-/** 保存页类型默认目录句柄 */
-export async function saveTargetDirectoryHandle(
+/** 保存平台默认目录句柄（对应设置页「默认目录」，按平台维度隔离） */
+export async function saveDefaultDirectoryHandle(
   handle: FileSystemDirectoryHandle,
-  pageType = 'default',
+  platformKey: string,
 ): Promise<void> {
-  await withStore('readwrite', (store) => store.put(handle, buildHandleKey(pageType)));
+  await withStore('readwrite', (store) => store.put(handle, buildDefaultHandleKey(platformKey)));
 }
 
-/** 读取页类型默认目录句柄 */
-export async function getTargetDirectoryHandle(
-  pageType = 'default',
+/** 读取平台默认目录句柄 */
+export async function getDefaultDirectoryHandle(
+  platformKey: string,
 ): Promise<FileSystemDirectoryHandle | undefined> {
-  return withStore('readonly', (store) => store.get(buildHandleKey(pageType)));
+  return withStore('readonly', (store) => store.get(buildDefaultHandleKey(platformKey)));
 }
 
-/** 删除页类型默认目录句柄 */
-export async function clearTargetDirectoryHandle(pageType = 'default'): Promise<void> {
-  await withStore('readwrite', (store) => store.delete(buildHandleKey(pageType)));
+/** 删除平台默认目录句柄 */
+export async function clearDefaultDirectoryHandle(platformKey: string): Promise<void> {
+  await withStore('readwrite', (store) => store.delete(buildDefaultHandleKey(platformKey)));
 }
 
 /** 保存页面级目录句柄快照 */
@@ -127,24 +131,6 @@ export async function clearTargetDirectoryHandleForScope(pageScope: string): Pro
   await withStore('readwrite', (store) => store.delete(buildPageHandleKey(normalized)));
 }
 
-/** 新页面建立快照时复制当前默认句柄 */
-export async function copyTargetDirectoryHandleToScope(
-  pageType: string,
-  pageScope: string,
-): Promise<boolean> {
-  const normalized = normalizeScopeKey(pageScope);
-  if (!normalized) return false;
-
-  try {
-    const handle = await getTargetDirectoryHandle(pageType);
-    if (!handle) return false;
-    await saveTargetDirectoryHandleForScope(handle, normalized);
-    return true;
-  } catch (_error: unknown) {
-    return false;
-  }
-}
-
 /** 标签页关闭后按 scope 前缀清理 IndexedDB 中的页面级句柄 */
 export async function clearTargetDirectoryHandlesByScopePrefix(scopePrefix: string): Promise<void> {
   const normalized = normalizeScopeKey(scopePrefix);
@@ -165,8 +151,24 @@ export async function clearTargetDirectoryHandlesByScopePrefix(scopePrefix: stri
   });
 }
 
-/** 获取目录句柄的展示标签 */
-export async function getTargetDirectoryLabel(pageType = 'default'): Promise<string> {
-  const handle = await getTargetDirectoryHandle(pageType);
-  return handle?.name || '';
+/**
+ * 清理全部「页类型全局句柄」（键前缀 target-directory:，不含 -page/-default）。
+ * 旧版共享槽已整体退役：任何页面选择目录都会覆盖该槽，导致多页面路径互相污染。
+ * 迁移清洗时调用，幂等。
+ */
+export async function clearAllTargetDirectoryHandles(): Promise<void> {
+  const keyPrefix = `${HANDLE_KEY_PREFIX}:`;
+  await withStore('readwrite', (store) => {
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const key = String(cursor.key || '');
+      if (key.startsWith(keyPrefix)) {
+        cursor.delete();
+      }
+      cursor.continue();
+    };
+    return request;
+  });
 }

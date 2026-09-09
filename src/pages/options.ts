@@ -9,6 +9,7 @@ import { CONTROL_TYPE_REFERENCE, H3YUN_CONTROL_TYPE_REFERENCE } from '../lib/pla
 import { buildDiagnosticPackage, saveLastDiagnosticPackage, loadLastDiagnosticPackage } from '../services/preflight-diagnostics.js';
 import { fetchLatestRelease, isUpToDate, hasNewerVersion, type LatestReleaseInfo } from '../services/update-checker.js';
 import { CURRENT_EXTENSION_VERSION } from '../lib/release-notes.js';
+import { saveDefaultDirectoryHandle, clearDefaultDirectoryHandle } from '../lib/directory/file-handle-db.js';
 
 // ── 工具 ──────────────────────────────────────────────
 
@@ -134,6 +135,29 @@ function renderDefaultDirs(): void {
   const hyInput = $('#default-dir-h3yun') as HTMLInputElement | null;
   if (cpInput) cpInput.value = getFallbackDirectoryPathByPlatform(state.config, 'cloudpivot');
   if (hyInput) hyInput.value = getFallbackDirectoryPathByPlatform(state.config, 'h3yun');
+}
+
+/** 通过原生目录选择器浏览并绑定平台默认目录（保存句柄 + 回填路径字符串） */
+async function pickDefaultDirectory(platformKey: PlatformKey): Promise<void> {
+  const w = window as unknown as {
+    showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+  };
+  if (typeof w.showDirectoryPicker !== 'function') {
+    showToast('当前浏览器不支持目录选择，请使用 Chrome 86+ 或 Edge 86+', 'error');
+    return;
+  }
+  try {
+    const handle = await w.showDirectoryPicker({ mode: 'read' });
+    const label = handle.name || '';
+    const input = platformKey === 'h3yun' ? $('#default-dir-h3yun') : $('#default-dir-cloudpivot');
+    if (input) (input as HTMLInputElement).value = label;
+    await saveDefaultDirectoryHandle(handle, platformKey);
+    showToast(label ? `已选择默认目录：${label}` : '已选择默认目录', 'success');
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') return; // 用户取消
+    logger.error('选择默认目录失败', { error: String(error) });
+    showToast('选择目录失败', 'error');
+  }
 }
 
 // ── 3. 使用说明 ───────────────────────────────────────
@@ -338,6 +362,9 @@ async function handleSubmit(): Promise<void> {
       h3yunOneClickWriteback: state.config.h3yunOneClickWriteback,
       fallbackDirectoryPaths: { cloudpivot: cpPath, h3yun: hyPath },
     });
+    // 默认目录被清空时同步清空对应句柄，避免路径字符串与句柄不一致
+    if (!cpPath.trim()) await clearDefaultDirectoryHandle('cloudpivot');
+    if (!hyPath.trim()) await clearDefaultDirectoryHandle('h3yun');
     state.config = await loadConfig();
     showToast('配置已保存', 'success');
   } catch (err: unknown) {
@@ -428,6 +455,14 @@ function bindExpandAll(): void {
 function bindEvents(): void {
   // 文件生成
   bindGenfileInputs();
+
+  // 默认目录浏览按钮
+  for (const btn of $$('[data-default-dir-platform]')) {
+    btn.addEventListener('click', () => {
+      const key = (btn as HTMLElement).dataset.defaultDirPlatform;
+      if (key === 'cloudpivot' || key === 'h3yun') void pickDefaultDirectory(key);
+    });
+  }
 
   // 保存/重置
   $('#save-btn')?.addEventListener('click', () => { void handleSubmit(); });

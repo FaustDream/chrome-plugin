@@ -13,6 +13,8 @@ export interface RecentDirectoryEntry {
   readonly path: string;
   readonly pageType: string;
   readonly lastUsedAt: number;
+  /** 选择该目录时的页面 scope（用于精确恢复 IndexedDB 中的页面级句柄） */
+  readonly scope?: string;
 }
 
 /**
@@ -52,16 +54,13 @@ export function normalizeRecentTargetDirectories(value: unknown): RecentDirector
   if (!Array.isArray(value)) return [];
 
   const sorted = value
-    .map((item: unknown) => {
+    .map((item: unknown): RecentDirectoryEntry | null => {
       if (!item || typeof item !== 'object') return null;
       const obj = item as Record<string, unknown>;
       const path = normalizePath(obj.path);
       if (!path) return null;
-      return {
-        path,
-        pageType: normalizePageType(obj.pageType),
-        lastUsedAt: normalizeTimestamp(obj.lastUsedAt),
-      };
+      const scope = typeof obj.scope === 'string' && obj.scope.trim() ? obj.scope.trim() : undefined;
+      return { path, pageType: normalizePageType(obj.pageType), lastUsedAt: normalizeTimestamp(obj.lastUsedAt), ...(scope ? { scope } : {}) };
     })
     .filter((e): e is RecentDirectoryEntry => e !== null)
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
@@ -90,6 +89,7 @@ export function mergeRecentTargetDirectories(
       path: normalizedPath,
       pageType: normalizePageType(nextRecord.pageType),
       lastUsedAt: normalizeTimestamp(nextRecord.lastUsedAt) || Date.now(),
+      scope: typeof nextRecord.scope === 'string' && nextRecord.scope.trim() ? nextRecord.scope.trim() : undefined,
     },
     ...normalizeRecentTargetDirectories(records),
   ];
@@ -116,9 +116,10 @@ export async function getRecentTargetDirectories(): Promise<RecentDirectoryEntry
 export async function addRecentTargetDirectory(
   path: string,
   pageType?: string,
+  scope?: string,
 ): Promise<RecentDirectoryEntry[]> {
   const records = await loadRecords();
-  const next = mergeRecentTargetDirectories(records, { path, pageType, lastUsedAt: Date.now() });
+  const next = mergeRecentTargetDirectories(records, { path, pageType, lastUsedAt: Date.now(), scope });
   return saveRecords(next);
 }
 

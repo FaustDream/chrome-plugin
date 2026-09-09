@@ -8,6 +8,7 @@
  * 约束：状态不写入模块级可变变量（用 chrome.storage 替代）。
  */
 import { resolvePageTypeConfig } from '../services/config.js';
+import { cleanupLegacyDirectoryData } from '../services/target-directory-state.js';
 import { logger } from '../lib/logger.js';
 import { createPageScope } from '../lib/utils.js';
 import type { PageType } from '../types/platform.js';
@@ -88,6 +89,10 @@ async function clearTabSnapshots(tabId: number): Promise<void> {
 function bootstrapExtension(): void {
   snapshotExistingTabs().catch((err: unknown) => {
     logger.warn('Snapshot existing tabs failed', { error: String(err) });
+  });
+  // 旧共享槽迁移清洗（幂等）：删除 pageType 全局句柄 / LAST_DIRECTORY / 假 scope 快照
+  cleanupLegacyDirectoryData().catch((err: unknown) => {
+    logger.warn('Legacy directory cleanup failed', { error: String(err) });
   });
 }
 

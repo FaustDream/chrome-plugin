@@ -9,9 +9,13 @@
 
 import { logger } from '../lib/logger.js';
 import { DirectoryError, ValidationError, ERROR_CODE } from '../lib/errors.js';
-import { normalizePath } from '../lib/utils.js';
-import { saveTargetDirectoryHandleForScope } from '../lib/directory/file-handle-db.js';
+import {
+  saveTargetDirectoryHandleForScope,
+  getTargetDirectoryHandleForScope,
+  getDefaultDirectoryHandle,
+} from '../lib/directory/file-handle-db.js';
 import { createTargetDirectoryPageScope } from './target-directory-session.js';
+import { getPlatformKeyFromPageType } from './config.js';
 import {
   getStoredDirectoryPath,
   saveHandleSelection,
@@ -77,15 +81,38 @@ type ExtendedDirectoryHandle = FileSystemDirectoryHandle & {
   queryPermission?(opts: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
 };
 
-function showDirPicker(): Promise<FileSystemDirectoryHandle> {
+interface DirectoryPickerOptions {
+  /** 目录选择器初始打开位置（当前环境已绑定目录的句柄） */
+  readonly startIn?: FileSystemDirectoryHandle;
+}
+
+function showDirPicker(options: DirectoryPickerOptions = {}): Promise<FileSystemDirectoryHandle> {
   const w = window as unknown as {
-    showDirectoryPicker?: (options?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+    showDirectoryPicker?: (options?: {
+      mode?: 'read' | 'readwrite';
+      startIn?: FileSystemDirectoryHandle;
+    }) => Promise<FileSystemDirectoryHandle>;
   };
   if (typeof w.showDirectoryPicker !== 'function') {
     throw new ValidationError('showDirectoryPicker not available', { available: false });
   }
+
   // 选择时直接请求读写权限：授权状态由浏览器缓存，后续操作从缓存获取，避免首次回写失败
-  return w.showDirectoryPicker({ mode: 'readwrite' });
+  const build = (startIn?: FileSystemDirectoryHandle): Promise<FileSystemDirectoryHandle> =>
+    w.showDirectoryPicker!({
+      mode: 'readwrite',
+      ...(startIn ? { startIn } : {}),
+    });
+
+  if (!options.startIn) return build();
+
+  // 指定 startIn（当前环境已绑定目录）时，若句柄因权限被撤销等原因失效会抛错，
+  // 此时回退为不带 startIn 重试，保证目录选择器仍可正常打开。
+  return build(options.startIn).catch((error: unknown) => {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    logger.warn('showDirectoryPicker with startIn failed, retrying without startIn', { error: String(error) });
+    return build();
+  });
 }
 
 function requestHandlePermission(
@@ -122,6 +149,40 @@ export function supportsDirectoryPicker(): boolean {
 
 // ── 目录选择 ──────────────────────────────────────────
 
+/**
+ * 解析目录选择器初始打开位置（startIn）对应的句柄。
+ *
+ * 优先级（由高到低）：
+ *  1) 当前页面 scope 句柄（该页面已绑定目录，选择器定位到当前目录）
+ *  2) 当前项目（平台）设置的默认目录句柄（新页面手动选择时的快捷定位）
+ *  3) 无（回退为系统默认，即不带 startIn）
+ *
+ * 明确排除旧共享槽：不经过 resolveTargetDirectoryHandle（scope 之外还有
+ * 平台「上次选择目录」回退），也不读取 pageType 全局句柄，避免选择器
+ * 打开到其他页面 / 其他项目的历史目录。
+ */
+async function resolveDirectoryPickerStartIn(
+  tab: TabInfo | number,
+  pageType: string,
+): Promise<FileSystemDirectoryHandle | undefined> {
+  const granted = async (handle?: FileSystemDirectoryHandle): Promise<FileSystemDirectoryHandle | undefined> =>
+    handle && (await queryHandlePermission(handle)) === 'granted' ? handle : undefined;
+
+  // 1) 当前页面 scope 句柄（该页面已绑定目录）
+  const pageScope = createTargetDirectoryPageScope(tab, pageType);
+  if (pageScope) {
+    const scopeHandle = await granted(await getTargetDirectoryHandleForScope(pageScope));
+    if (scopeHandle) return scopeHandle;
+  }
+
+  // 2) 当前项目（平台）设置的默认目录句柄（新页面手动选择时的快捷定位）
+  const platformKey = getPlatformKeyFromPageType(pageType);
+  const defaultHandle = await granted(await getDefaultDirectoryHandle(platformKey));
+  if (defaultHandle) return defaultHandle;
+
+  return undefined;
+}
+
 /** 弹出原生目录选择器并保存绑定 */
 export async function selectHandleDirectory(
   tab: TabInfo | number,
@@ -130,7 +191,11 @@ export async function selectHandleDirectory(
   if (!supportsDirectoryPicker()) return null;
 
   try {
-    const handle = await showDirPicker();
+    // 「更新当前路径」默认打开「当前有效路径 → 项目默认目录」对应的句柄（startIn），
+    // 禁止回退到系统全局默认目录 / 上一次缓存目录 / 其他项目历史目录。
+    const startIn = await resolveDirectoryPickerStartIn(tab, pageType);
+
+    const handle = await showDirPicker(startIn ? { startIn } : {});
     // 选择后立即确认读写权限已授予（showDirectoryPicker({ mode: 'readwrite' }) 会弹浏览器自带授权，
     // 授权状态写入浏览器缓存，后续 queryPermission/requestPermission 直接复用缓存）
     const permission = await requestHandlePermission(handle, 'readwrite');
@@ -348,6 +413,29 @@ export async function requestTargetDirectoryPermission(
 ): Promise<DirectoryPermissionState> {
   const handle = await resolveTargetDirectoryHandle(tab, pageType);
   if (!handle) return 'none';
+  return normalizePermissionState(await requestHandlePermission(handle, 'readwrite'));
+}
+
+// ── 指定句柄权限（历史路径恢复专用） ──────────────────
+
+/**
+ * 查询指定句柄的权限状态（不触发授权弹窗）。
+ * 用于历史路径恢复：直接检查历史句柄自身权限，
+ * 而非通过 resolveTargetDirectoryHandle 的 scope 解析（后者可能命中当前页面的其他句柄）。
+ */
+export async function queryHandlePermissionState(
+  handle: FileSystemDirectoryHandle,
+): Promise<DirectoryPermissionState> {
+  return normalizePermissionState(await queryHandlePermission(handle));
+}
+
+/**
+ * 请求指定句柄的读写授权（会触发浏览器授权弹窗，需在用户手势中调用）。
+ * 用于历史路径恢复：直接对历史句柄请求授权。
+ */
+export async function requestHandlePermissionState(
+  handle: FileSystemDirectoryHandle,
+): Promise<DirectoryPermissionState> {
   return normalizePermissionState(await requestHandlePermission(handle, 'readwrite'));
 }
 
