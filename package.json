@@ -1,6 +1,6 @@
 {
   "name": "cloudpiovt-plugin",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "private": true,
   "type": "module",
   "description": "云枢/氚云在线低代码平台与本地目录桥接扩展（TypeScript 按职责重写版）",
