@@ -52,6 +52,7 @@
 * 每次完整改动完成并验证后创建一个 Git commit。
 * 高风险修改前先提交已验证版本，作为回滚点。
 * Commit 应对应完整、可独立回退的改动。
+* 每次执行了版本更新操作后，进行构建最新版本的releases。将代码git push 到github。将最新版本的releases 上传到github的releases。
 
 ## 文档与记忆
 
